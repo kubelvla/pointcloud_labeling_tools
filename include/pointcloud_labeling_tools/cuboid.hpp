@@ -7,6 +7,7 @@ struct Cuboid {
     Eigen::Vector3f extent;
     Eigen::Matrix3f rotation;
     int id;
+    int category_id;
 };
 
 inline bool isInsideCuboid(const Eigen::Vector3f& pt, const Cuboid& box) {

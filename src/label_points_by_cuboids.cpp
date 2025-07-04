@@ -8,6 +8,9 @@
 #include <tf2/utils.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_ros/buffer.h>
+#include <visualization_msgs/msg/marker.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
+#include <unordered_set>
 
 
 #include <omp.h>
@@ -15,6 +18,9 @@
 #include <fstream>
 #include <chrono>
 #include <nlohmann/json.hpp>
+#include <array>
+#include <cmath>
+
 using json = nlohmann::json;
 using namespace std::chrono_literals;
 
@@ -23,10 +29,11 @@ public:
   PointCloudLabelerNode() : Node("pointcloud_labeler") {
     // Subscribers and publishers
     sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-      "/hugin_raf_1/radar_data", 10,
+      "/point_cloud_deskewed", 10,
       std::bind(&PointCloudLabelerNode::pointcloudCallback, this, std::placeholders::_1));
 
     pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/labeled_cloud", 10);
+    cuboid_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("labeled_cuboids", 10);
 
     // prepare the TF2 buffer for reading tfs
     tfBuffer = std::make_unique<tf2_ros::Buffer>(this->get_clock());
@@ -35,6 +42,8 @@ public:
     // Params
     world_frame_id_ = declare_parameter<std::string>("world_frame_id", "map");
     json_path = declare_parameter<std::string>("cuboid_file", "/home/vladimir/Downloads/Big_map_dense-v0.2.json");
+    sample_id = declare_parameter<int>("sample_id", 0);
+    label_set_name = declare_parameter<std::string>("label_set_name", "ground-truth");
 
 
     loadCuboids();
@@ -51,26 +60,96 @@ private:
     json j;
     in >> j;
 
-    json j_labels = j["dataset"]["samples"][0]["labels"]["ground-truth"]["attributes"]["annotations"];
+    json j_labels = j["dataset"]["samples"][sample_id]["labels"][label_set_name]["attributes"]["annotations"];
 
     for (const auto& item : j_labels) {
       Cuboid box;
       auto pos = item["position"];
       auto dim = item["dimensions"];
-      auto rot = item["yaw"];
+      auto rot = item["rotation"];
 
       box.center = Eigen::Vector3f(pos["x"], pos["y"], pos["z"]);
       box.extent = Eigen::Vector3f(dim["x"], dim["y"], dim["z"]);
 
-      // Convert Euler angles (assumed XYZ) to rotation matrix
-      Eigen::AngleAxisf rz(rot, Eigen::Vector3f::UnitZ());
-      box.rotation = rz;
-
-      box.id = item["category_id"];
+      // Convert quaternion into a rotation matrix
+      Eigen::Quaternionf q(rot["qw"], rot["qx"], rot["qy"], rot["qz"]);
+      box.rotation = q;
+      box.id = item["id"];
+      box.category_id = item["category_id"];
       cuboids_.push_back(box);
     }
 
     RCLCPP_INFO(this->get_logger(), "Loaded %zu cuboids from %s", cuboids_.size(), json_path.c_str());
+  }
+
+  std_msgs::msg::ColorRGBA colorFromId(uint32_t category_id) {
+    std_msgs::msg::ColorRGBA color;
+
+    // Use golden angle to generate distinct hues
+    float hue = std::fmod(0.61803398875f * category_id, 1.0f);  // golden ratio
+    float saturation = 0.7f;
+    float value = 0.9f;
+
+    float h = hue * 6.0f;
+    int i = static_cast<int>(std::floor(h));
+    float f = h - i;
+    float p = value * (1.0f - saturation);
+    float q = value * (1.0f - saturation * f);
+    float t = value * (1.0f - saturation * (1.0f - f));
+
+    switch (i % 6) {
+      case 0: color.r = value; color.g = t;     color.b = p;     break;
+      case 1: color.r = q;     color.g = value; color.b = p;     break;
+      case 2: color.r = p;     color.g = value; color.b = t;     break;
+      case 3: color.r = p;     color.g = q;     color.b = value; break;
+      case 4: color.r = t;     color.g = p;     color.b = value; break;
+      case 5: color.r = value; color.g = p;     color.b = q;     break;
+    }
+
+    color.a = 0.2f;  // semi-transparent
+    return color;
+  }
+
+  void visualize_cuboids(const std::unordered_set<int> &used_cuboid_ids) {
+    visualization_msgs::msg::MarkerArray marker_array;
+    int marker_id = 0;
+
+    for (const auto& cuboid : cuboids_) {
+      if (used_cuboid_ids.count(cuboid.id) == 0)
+        continue;
+
+      visualization_msgs::msg::Marker marker;
+      marker.header.frame_id = world_frame_id_;
+      marker.header.stamp = this->now();
+      marker.ns = "labeled_cuboids";
+      marker.id = marker_id++;
+      marker.type = visualization_msgs::msg::Marker::CUBE;
+      marker.action = visualization_msgs::msg::Marker::ADD;
+
+      // Position
+      marker.pose.position.x = cuboid.center.x();
+      marker.pose.position.y = cuboid.center.y();
+      marker.pose.position.z = cuboid.center.z();
+
+      // Orientation
+      Eigen::Quaternionf q(cuboid.rotation);
+      marker.pose.orientation.x = q.x();
+      marker.pose.orientation.y = q.y();
+      marker.pose.orientation.z = q.z();
+      marker.pose.orientation.w = q.w();
+
+      // Size
+      marker.scale.x = cuboid.extent.x();
+      marker.scale.y = cuboid.extent.y();
+      marker.scale.z = cuboid.extent.z();
+
+      // Color (optional: based on label)
+      marker.color = colorFromId(cuboid.category_id);
+      marker.lifetime = rclcpp::Duration(10.0s);  // Persist until updated
+      marker_array.markers.push_back(marker);
+    }
+
+    cuboid_pub_->publish(marker_array);
   }
 
   void pointcloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
@@ -96,6 +175,8 @@ private:
     // convert to a format suitable for transforming points
     tf2::convert(transform, stampedTransform);
 
+    // track what cuboids we have used
+    std::unordered_set<int> used_cuboid_ids;
 
     // Parallel labeling
     //TODO: Enable the OMP pragma below. Breaks debugging symbols otherwise
@@ -109,7 +190,9 @@ private:
 
       for (const auto& cuboid : cuboids_) {
         if (isInsideCuboid(p, cuboid)) {
-          labels[i] = cuboid.id;
+          labels[i] = cuboid.category_id;
+//#pragma omp critical
+          used_cuboid_ids.insert(cuboid.id);
           break;
         }
       }
@@ -145,18 +228,22 @@ private:
       *label_iter = labels[i];
     }
 
-
     // Publish the labelled point cloud
     pub_->publish(out_msg);
+
+    visualize_cuboids(used_cuboid_ids);
   }
 
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr cuboid_pub_;
   std::vector<Cuboid> cuboids_;
   std::unique_ptr<tf2_ros::TransformListener> tfListener;
   std::unique_ptr<tf2_ros::Buffer> tfBuffer;
   std::string world_frame_id_;
   std::string json_path;
+  int sample_id;
+  std::string label_set_name;
 
 };
 
