@@ -29,10 +29,10 @@ public:
   PointCloudLabelerNode() : Node("pointcloud_labeler") {
     // Subscribers and publishers
     sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-      "/point_cloud_deskewed", 10,
+      "input_pointcloud", 10,
       std::bind(&PointCloudLabelerNode::pointcloudCallback, this, std::placeholders::_1));
 
-    pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/labeled_cloud", 10);
+    pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("labeled_cloud", 10);
     cuboid_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("labeled_cuboids", 10);
 
     // prepare the TF2 buffer for reading tfs
@@ -44,7 +44,10 @@ public:
     json_path = declare_parameter<std::string>("cuboid_file", "/home/vladimir/Downloads/Big_map_dense-v0.2.json");
     sample_id = declare_parameter<int>("sample_id", 0);
     label_set_name = declare_parameter<std::string>("label_set_name", "ground-truth");
-
+    priority_list = this->declare_parameter<std::vector<int>>("label_priorities", {3,7,1,5,4,6,2});
+    for (size_t i = 0; i < priority_list.size(); ++i) {
+      label_priority_map[static_cast<int>(priority_list[i])] = static_cast<int>(i);
+    }
 
     loadCuboids();
   }
@@ -59,8 +62,19 @@ private:
 
     json j;
     in >> j;
+    json j_labels;
 
-    json j_labels = j["dataset"]["samples"][sample_id]["labels"][label_set_name]["attributes"]["annotations"];
+    try {
+      j_labels = j["dataset"]["samples"][sample_id]["labels"][label_set_name]["attributes"]["annotations"];
+    }catch (std::exception &ex) {
+      RCLCPP_ERROR(this->get_logger(), "Failed to extract annotations from the json file: %s", ex.what());
+      std::exit(1);
+    }
+
+    if (j_labels.empty()) {
+      RCLCPP_ERROR(this->get_logger(), "Failed to extract any annotations from the json file.");
+      std::exit(1);
+    }
 
     for (const auto& item : j_labels) {
       Cuboid box;
@@ -155,7 +169,8 @@ private:
   void pointcloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
     pcl::PointCloud<pcl::PointXYZ> pcl_cloud;
     pcl::fromROSMsg(*msg, pcl_cloud);
-    std::vector<std::uint32_t> labels(pcl_cloud.size(), 0);
+    std::vector<std::uint32_t> labels(pcl_cloud.size(), 0); // 0 is default for no label - background
+    std::vector<int> label_ranks(pcl_cloud.size(), std::numeric_limits<int>::max()); // for tracking label priority
 
     // Look up transform from the point cloud to the world frame
     geometry_msgs::msg::TransformStamped transform;
@@ -179,7 +194,7 @@ private:
     std::unordered_set<int> used_cuboid_ids;
 
     // Parallel labeling
-    //TODO: Enable the OMP pragma below. Breaks debugging symbols otherwise
+    //TODO: Enable the OMP pragma below. But it breaks debugging symbols
 //#pragma omp parallel for
     for (size_t i = 0; i < pcl_cloud.points.size(); ++i) {
       auto& pt = pcl_cloud.points[i];
@@ -188,9 +203,16 @@ private:
       Eigen::Vector3f p(tfd_point.x(), tfd_point.y(), tfd_point.z());
       labels[i] = 0;
 
+      // check all cuboids (TODO: can be optimized, limiting the cuboids or the points on some proximity rules)
       for (const auto& cuboid : cuboids_) {
         if (isInsideCuboid(p, cuboid)) {
-          labels[i] = cuboid.category_id;
+
+          // check priority
+          int priority = label_priority_map.count(cuboid.id) > 0 ? label_priority_map[cuboid.id] : 9999;  // default low priority
+          if (priority < label_ranks[i]) {
+            labels[i] = cuboid.category_id;
+            label_ranks[i] = priority;
+          }
 //#pragma omp critical
           used_cuboid_ids.insert(cuboid.id);
           break;
@@ -244,6 +266,8 @@ private:
   std::string json_path;
   int sample_id;
   std::string label_set_name;
+  std::vector<long> priority_list;
+  std::unordered_map<int, int> label_priority_map;
 
 };
 
