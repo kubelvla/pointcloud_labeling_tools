@@ -18,9 +18,17 @@ find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
 
 
 add_definitions(${PCL_DEFINITIONS})
+
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+        "srv/LabelPCD.srv"
+)
+
+ament_export_dependencies(rosidl_default_runtime)
 
 include_directories(
         include
@@ -31,7 +39,8 @@ include_directories(
 
 add_executable(label_points_by_cuboids src/label_points_by_cuboids.cpp)
 ament_target_dependencies(label_points_by_cuboids rclcpp sensor_msgs pcl_conversions tf2 tf2_ros tf2_geometry_msgs visualization_msgs)
-target_link_libraries(label_points_by_cuboids ${PCL_LIBRARIES})
+rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")    #This is to use our own service, otherwise the compiler won't find the headers
+target_link_libraries(label_points_by_cuboids ${PCL_LIBRARIES} "${cpp_typesupport_target}")
 target_compile_features(label_points_by_cuboids PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
 target_compile_options(label_points_by_cuboids PRIVATE -fopenmp)
 target_link_libraries(label_points_by_cuboids gomp nlohmann_json::nlohmann_json)  # OpenMP runtime if needed

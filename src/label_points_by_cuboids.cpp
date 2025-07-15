@@ -13,6 +13,10 @@
 #include <unordered_set>
 
 
+#include "pointcloud_labeling_tools/srv/label_pcd.hpp"
+#include <pcl/io/pcd_io.h>
+#include <pcl/point_types.h>
+
 #include <omp.h>
 #include <vector>
 #include <fstream>
@@ -27,13 +31,18 @@ using namespace std::chrono_literals;
 class PointCloudLabelerNode : public rclcpp::Node {
 public:
   PointCloudLabelerNode() : Node("pointcloud_labeler") {
-    // Subscribers and publishers
+    // Subscribers and publishers and services
     sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
       "input_pointcloud", 10,
       std::bind(&PointCloudLabelerNode::pointcloudCallback, this, std::placeholders::_1));
 
     pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("labeled_cloud", 10);
     cuboid_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("labeled_cuboids", 10);
+
+    label_service_ = this->create_service<pointcloud_labeling_tools::srv::LabelPCD>(
+      "label_pcd_file",
+    std::bind(&PointCloudLabelerNode::labelPCDCallback, this, std::placeholders::_1, std::placeholders::_2)
+);
 
     // prepare the TF2 buffer for reading tfs
     tfBuffer = std::make_unique<tf2_ros::Buffer>(this->get_clock());
@@ -256,9 +265,66 @@ private:
     visualize_cuboids(used_cuboid_ids);
   }
 
+  void labelPCDCallback(
+    const std::shared_ptr<pointcloud_labeling_tools::srv::LabelPCD::Request> request,
+    std::shared_ptr<pointcloud_labeling_tools::srv::LabelPCD::Response> response)
+  {
+    const std::string& input_path = request->file_path;
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
+    if (pcl::io::loadPCDFile(input_path, *cloud) < 0) {
+      response->success = false;
+      response->message = "Failed to load file: " + input_path;
+      return;
+    }
+
+    // Run labeling logic here...
+    std::vector<uint32_t> labels(cloud->size(), 0);
+    std::vector<int> label_ranks(cloud->size(), std::numeric_limits<int>::max());
+
+    for (size_t i = 0; i < cloud->points.size(); ++i) {
+      Eigen::Vector3f pt(cloud->points[i].x, cloud->points[i].y, cloud->points[i].z);
+      for (const auto& cuboid : cuboids_) {
+        if (!isInsideCuboid(pt, cuboid)) continue;
+
+        int priority = label_priority_map.count(cuboid.id) > 0 ? label_priority_map[cuboid.id] : 9999;
+
+        if (priority < label_ranks[i]) {
+          label_ranks[i] = priority;
+          labels[i] = cuboid.id;
+        }
+      }
+    }
+
+    // Add label field and save output
+    pcl::PointCloud<pcl::PointXYZL>::Ptr labeled(new pcl::PointCloud<pcl::PointXYZL>);
+    labeled->resize(cloud->size());
+
+    for (size_t i = 0; i < cloud->size(); ++i) {
+      labeled->points[i].x = cloud->points[i].x;
+      labeled->points[i].y = cloud->points[i].y;
+      labeled->points[i].z = cloud->points[i].z;
+      labeled->points[i].label = labels[i];
+    }
+
+    // Construct output filename
+    std::filesystem::path in_path(input_path);
+    std::string out_path = in_path.parent_path().string() + "/labeled_" + in_path.filename().string();
+
+    if (pcl::io::savePCDFileBinary(out_path, *labeled) < 0) {
+      response->success = false;
+      response->message = "Failed to save labeled file to: " + out_path;
+      return;
+    }
+
+    response->success = true;
+    response->message = "Labeled PCD saved to: " + out_path;
+  }
+
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr cuboid_pub_;
+  rclcpp::Service<pointcloud_labeling_tools::srv::LabelPCD>::SharedPtr label_service_;
   std::vector<Cuboid> cuboids_;
   std::unique_ptr<tf2_ros::TransformListener> tfListener;
   std::unique_ptr<tf2_ros::Buffer> tfBuffer;
