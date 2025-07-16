@@ -210,14 +210,14 @@ private:
       // convert to the world frame
       tf2::Vector3 tfd_point = stampedTransform * tf2::Vector3(pt.x, pt.y, pt.z);
       Eigen::Vector3f p(tfd_point.x(), tfd_point.y(), tfd_point.z());
-      labels[i] = 0;
 
       // check all cuboids (TODO: can be optimized, limiting the cuboids or the points on some proximity rules)
+      labels[i] = 0;
       for (const auto& cuboid : cuboids_) {
         if (isInsideCuboid(p, cuboid)) {
 
           // check priority
-          int priority = label_priority_map.count(cuboid.id) > 0 ? label_priority_map[cuboid.id] : 9999;  // default low priority
+          int priority = label_priority_map.count(cuboid.category_id) > 0 ? label_priority_map[cuboid.category_id] : 9999;  // default low priority
           if (priority < label_ranks[i]) {
             labels[i] = cuboid.category_id;
             label_ranks[i] = priority;
@@ -287,11 +287,11 @@ private:
       for (const auto& cuboid : cuboids_) {
         if (!isInsideCuboid(pt, cuboid)) continue;
 
-        int priority = label_priority_map.count(cuboid.id) > 0 ? label_priority_map[cuboid.id] : 9999;
+        int priority = label_priority_map.count(cuboid.category_id) > 0 ? label_priority_map[cuboid.category_id] : 9999;
 
         if (priority < label_ranks[i]) {
           label_ranks[i] = priority;
-          labels[i] = cuboid.id;
+          labels[i] = cuboid.category_id;
         }
       }
     }
