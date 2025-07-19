@@ -1,0 +1,17 @@
+<launch>
+    <node
+            pkg="pointcloud_labeling_tools"
+            exec="pointcloud_accumulator"
+            name="pointcloud_accumulator"
+            output="screen">
+
+        <!-- Parameters -->
+        <param name="input_topic" value="/labeled_cloud"/>
+        <param name="output_topic" value="/assembled_cloud"/>
+        <param name="fixed_frame" value="map"/>
+        <param name="trigger_mode" value="max_count"/>  <!-- max_count or max_distance -->
+        <param name="trigger_threshold" value="10.0"/>    <!-- 1.0 meters or 10.0 frames (must be float) -->
+        <param name="output_frame" value="base_link"/>    <!-- if empty or not defined, cloud left in the fixed frame -->
+
+    </node>
+</launch>

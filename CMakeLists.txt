@@ -10,6 +10,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(pcl_conversions REQUIRED)
+find_package(pcl_ros REQUIRED)
 find_package(PCL REQUIRED COMPONENTS common io)
 find_package(Eigen3 REQUIRED)
 find_package(nlohmann_json REQUIRED)
@@ -45,7 +46,13 @@ target_compile_features(label_points_by_cuboids PUBLIC c_std_99 cxx_std_17)  # R
 target_compile_options(label_points_by_cuboids PRIVATE -fopenmp)
 target_link_libraries(label_points_by_cuboids gomp nlohmann_json::nlohmann_json)  # OpenMP runtime if needed
 
-install(TARGETS label_points_by_cuboids
+
+add_executable(pointcloud_accumulator src/pointcloud_accumulator.cpp)
+ament_target_dependencies(pointcloud_accumulator rclcpp sensor_msgs tf2_ros tf2_geometry_msgs pcl_conversions pcl_ros)
+target_link_libraries(pointcloud_accumulator ${PCL_LIBRARIES})
+
+
+install(TARGETS label_points_by_cuboids pointcloud_accumulator
   DESTINATION lib/${PROJECT_NAME})
 
 install(

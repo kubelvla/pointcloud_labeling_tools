@@ -66,7 +66,7 @@ private:
     std::ifstream in(json_path);
     if (!in) {
       RCLCPP_ERROR(this->get_logger(), "Could not open cuboid JSON file: %s", json_path.c_str());
-      return;
+      std::exit(1);
     }
 
     json j;
