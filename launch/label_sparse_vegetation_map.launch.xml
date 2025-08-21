@@ -2,7 +2,7 @@
     <node pkg="pointcloud_labeling_tools" exec="label_points_by_cuboids" name="sparse_vegetation_labeler">
         <remap from="input_pointcloud" to="/hugin_raf_1/radar_data"/>
         <param name="world_frame_id" value="map"/>
-        <param name="cuboid_file" value="/home/vladimir/Downloads/Big_map_dense-v0.2.json"/>
+        <param name="cuboid_file" value="/home/vladimir/oru_data/ros2/Ruslan/2024_05_01_Husky_Ruslan_Viking_hills_dense/labels/Big_map_dense-v0.3.json"/>
         <param name="sample_id" value="0"/>
         <param name="label_set_name" value="ground-truth"/>
         <param name="label_priorities" value="3, 7, 1, 5, 4, 6, 2" value-sep=", "/>
